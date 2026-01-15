@@ -10,19 +10,20 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type masterResolver interface {
-	MasterAddress() string
+type resolver interface {
+	Address() string
+	DecrementConn(addr string)
 }
 
 type RedisSentinelProxy struct {
-	localAddr      *net.TCPAddr
-	masterResolver masterResolver
+	localAddr *net.TCPAddr
+	resolver  resolver
 }
 
-func NewRedisSentinelProxy(localAddr *net.TCPAddr, mResolver masterResolver) *RedisSentinelProxy {
+func NewRedisSentinelProxy(localAddr *net.TCPAddr, r resolver) *RedisSentinelProxy {
 	return &RedisSentinelProxy{
-		localAddr:      localAddr,
-		masterResolver: mResolver,
+		localAddr: localAddr,
+		resolver:  r,
 	}
 }
 
@@ -57,12 +58,19 @@ func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TC
 }
 
 func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
-	remote, err := utils.TCPConnectWithTimeout(r.masterResolver.MasterAddress())
-	if err != nil {
+	remoteAddr := r.resolver.Address()
+	if remoteAddr == "" {
 		defer incoming.Close()
-		log.Printf("Error connecting to master: %s", err)
+		log.Printf("No address available")
 		return
 	}
+	remote, err := utils.TCPConnectWithTimeout(remoteAddr)
+	if err != nil {
+		defer incoming.Close()
+		log.Printf("Error connecting to %s: %s", remoteAddr, err)
+		return
+	}
+	defer r.resolver.DecrementConn(remoteAddr)
 
 	sigChan := make(chan struct{})
 	defer close(sigChan)

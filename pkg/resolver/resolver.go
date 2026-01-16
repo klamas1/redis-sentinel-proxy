@@ -369,7 +369,7 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 	if err != nil {
 		return nil, fmt.Errorf("error getting info from sentinel: %w", err)
 	}
-
+  log.Printf("[DEBUG] Received response from sentinel: %s", string(b[:n]))
 	// Extract master address parts
 	parts := strings.Split(string(b[:n]), "\r\n")
 	if len(parts) < 5 {
@@ -469,60 +469,32 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	var replicas []*net.TCPAddr
 	index := 1
 	for i := 0; i < numSlaves; i++ {
-		log.Printf("[DEBUG] i=%d, index=%d, len(parts)=%d", i, index, len(parts))
-		if index >= len(parts) || !strings.HasPrefix(parts[index], "*") {
-			log.Printf("[DEBUG] Breaking loop at i=%d, index=%d, len(parts)=%d", i, index, len(parts))
-			break
-		}
+
 		numFields, err := strconv.Atoi(parts[index][1:])
 		if err != nil {
 			return nil, fmt.Errorf("error parsing number of fields for slave %d: %w", i, err)
 		}
+    if len(parts) < 5 {
+      return nil, errors.New("couldn't get master address from sentinel")
+    }
 		log.Printf("[DEBUG] numFields=%d", numFields)
-		index++
-		var ip, port string
-		j := 0
-		for ; j < numFields; j++ {
-			log.Printf("[DEBUG] j=%d, index=%d", j, index)
-			
-			// Проверка на достаточность элементов для парсинга пары ключ-значение
-			// Каждая пара: $<len> <key> $<len> <value>
-			if index+3 >= len(parts) || !strings.HasPrefix(parts[index], "$") || !strings.HasPrefix(parts[index+2], "$") {
-				log.Printf("[DEBUG] Not enough parts for j=%d: index=%d, required=%d, len=%d", j, index, index+3, len(parts))
-				log.Printf("[DEBUG] Parts from index %d: %v", index, parts[index:])
-				break
-			}
-			// Skip $len for key
-			index++
-			key := parts[index]
-			index++
-			// Skip $len for value
-			index++
-			value := parts[index]
-			index++
-			
-			if key == "ip" {
-				ip = value
-			}
-			if key == "port" {
-				port = value
-			}
-		}
-		if ip != "" && port != "" {
-			log.Printf("[DEBUG] Found replica %s:%s after %d fields", ip, port, j)
-			addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%s", ip, port))
-			if err != nil {
-				log.Printf("error resolving replica address %s:%s: %v", ip, port, err)
-				continue
-			}
-			// Check if replica is accessible
-			if err := checkTCPConnect(addr); err != nil {
-				log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
-				continue
-			}
-			log.Printf("[DEBUG] Replica %s accessible", addr.String())
-			replicas = append(replicas, addr)
-		}
+
+    // Assemble replica address
+    // $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379
+    formattedReplicaAddress := fmt.Sprintf("%s:%s", parts[2], parts[4])
+    addr, err := net.ResolveTCPAddr("tcp", formattedReplicaAddress)
+    if err != nil {
+      return nil, fmt.Errorf("error resolving redis master: %w", err)
+    }
+
+    // Check if replica is accessible
+    if err := checkTCPConnect(addr); err != nil {
+      log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
+      continue
+    }
+    log.Printf("[DEBUG] Replica %s accessible", addr.String())
+    replicas = append(replicas, addr)
+
 	}
 
 	log.Printf("[DEBUG] Total replicas found: %d", len(replicas))

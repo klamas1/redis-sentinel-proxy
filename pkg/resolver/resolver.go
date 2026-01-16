@@ -207,6 +207,7 @@ func (r *ReplicaResolver) UpdateReplicas(masterAddr string) error {
 		log.Println(err)
 		return err
 	}
+  log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
 	log.Printf("[DEBUG] UpdateReplicas before filter: replicas=%v, masterAddr=%s", replicas, masterAddr)
 	// Filter out the current master
 	var filtered []*net.TCPAddr
@@ -425,13 +426,18 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	}
 
 	// Read response
-	b := make([]byte, 256)
-	n, err := conn.Read(b)
-	if err != nil {
-		return nil, fmt.Errorf("error getting info from sentinel: %w", err)
+	var response strings.Builder
+	b := make([]byte, 2048)
+	for {
+		n, err := conn.Read(b)
+		if err != nil {
+			break
+		}
+		response.Write(b[:n])
+		if n < len(b) {
+			break
+		}
 	}
-
-  response.Write(b[:n])
 
 	log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
 

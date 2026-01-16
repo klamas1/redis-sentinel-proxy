@@ -70,15 +70,17 @@ func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
 		remoteAddr = r.resolver.ReplicaAddress()
 	}
 	if remoteAddr == "" {
-		log.Printf("No address available")
+		log.Printf("[DEBUG] Proxy request: no address available")
 		return
 	}
+	log.Printf("[DEBUG] Proxy request: connecting to %s", remoteAddr)
 	remote, err := utils.TCPConnectWithTimeout(remoteAddr)
 	if err != nil {
-		log.Printf("Error connecting to %s: %s", remoteAddr, err)
+		log.Printf("[DEBUG] Proxy error: failed to connect to %s: %s", remoteAddr, err)
 		return
 	}
 	defer r.resolver.DecrementConn(remoteAddr)
+	log.Printf("[DEBUG] Proxy response: connected to %s", remoteAddr)
 
 	sigChan := make(chan struct{})
 	defer close(sigChan)

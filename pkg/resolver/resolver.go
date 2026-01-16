@@ -30,7 +30,8 @@ type RedisMasterResolver struct {
 	masterAddrLock           *sync.RWMutex
 	initialMasterResolveLock chan struct{}
 
-	masterAddr string
+	masterAddr     string
+	previousMaster string
 }
 
 func NewRedisMasterResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnMasterResolveFail int) *RedisMasterResolver {
@@ -63,7 +64,12 @@ func (r *RedisMasterResolver) RetryOnResolveFail() int {
 func (r *RedisMasterResolver) setMasterAddress(masterAddr *net.TCPAddr) {
 	r.masterAddrLock.Lock()
 	defer r.masterAddrLock.Unlock()
-	r.masterAddr = masterAddr.String()
+	newAddr := masterAddr.String()
+	if r.masterAddr != "" && r.masterAddr != newAddr {
+		log.Printf("[DEBUG] Master switched from %s to %s", r.masterAddr, newAddr)
+	}
+	r.previousMaster = r.masterAddr
+	r.masterAddr = newAddr
 }
 
 func (r *RedisMasterResolver) UpdateMasterAddress() error {
@@ -194,45 +200,28 @@ func (r *ReplicaResolver) RetryOnResolveFail() int {
 	return r.retryOnResolveFail
 }
 
-func (r *ReplicaResolver) InitialReplicaResolve() error {
-	defer close(r.initialResolveLock)
-	return r.UpdateReplicas()
-}
 
-func (r *ReplicaResolver) UpdateReplicasLoop(ctx context.Context) error {
-	if err := r.InitialReplicaResolve(); err != nil {
-		return err
-	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	var err error
-	for errCount := 0; errCount <= r.retryOnResolveFail; {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
-
-		err = r.UpdateReplicas()
-		if err != nil {
-			errCount++
-		} else {
-			errCount = 0
-		}
-	}
-	return err
-}
-
-func (r *ReplicaResolver) UpdateReplicas() error {
+func (r *ReplicaResolver) UpdateReplicas(masterAddr string) error {
 	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	r.setReplicas(replicas)
+	// Filter out the current master
+	var filtered []*net.TCPAddr
+	for _, replica := range replicas {
+		if replica.String() != masterAddr {
+			filtered = append(filtered, replica)
+		}
+	}
+	r.setReplicas(filtered)
 	return nil
+}
+
+func (r *ReplicaResolver) GetReplicas() []*net.TCPAddr {
+	r.replicasLock.RLock()
+	defer r.replicasLock.RUnlock()
+	return append([]*net.TCPAddr(nil), r.replicas...) // copy
 }
 
 func (r *ReplicaResolver) setReplicas(replicas []*net.TCPAddr) {
@@ -248,6 +237,7 @@ func (r *ReplicaResolver) setReplicas(replicas []*net.TCPAddr) {
 type RedisSentinelResolver struct {
 	masterResolver  *RedisMasterResolver
 	replicaResolver *ReplicaResolver
+	debug           bool
 }
 
 func NewRedisSentinelResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, debug bool) *RedisSentinelResolver {
@@ -256,15 +246,24 @@ func NewRedisSentinelResolver(masterName string, sentinelAddr *net.TCPAddr, sent
 	return &RedisSentinelResolver{
 		masterResolver:  masterResolver,
 		replicaResolver: replicaResolver,
+		debug:           debug,
 	}
 }
 
 func (r *RedisSentinelResolver) MasterAddress() string {
-	return r.masterResolver.Address()
+	addr := r.masterResolver.Address()
+	if r.debug {
+		log.Printf("[DEBUG] Resolver request: master address -> %s", addr)
+	}
+	return addr
 }
 
 func (r *RedisSentinelResolver) ReplicaAddress() string {
-	return r.replicaResolver.Address()
+	addr := r.replicaResolver.Address()
+	if r.debug && addr != "" {
+		log.Printf("[DEBUG] Resolver request: replica address -> %s", addr)
+	}
+	return addr
 }
 
 func (r *RedisSentinelResolver) DecrementConn(addr string) {
@@ -288,20 +287,23 @@ func (r *RedisSentinelResolver) UpdateLoop(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		// Update both master and replicas synchronously
+		// Update master first
 		masterErr := r.masterResolver.UpdateMasterAddress()
-		replicaErr := r.replicaResolver.UpdateReplicas()
-
-		if masterErr != nil || replicaErr != nil {
+		if masterErr != nil {
 			errCount++
-			if masterErr != nil {
-				err = masterErr
-				log.Println("Master update error:", masterErr)
-			}
-			if replicaErr != nil {
-				err = replicaErr
-				log.Println("Replica update error:", replicaErr)
-			}
+			err = masterErr
+			log.Println("Master update error:", masterErr)
+			continue
+		}
+
+		// Then update replicas, excluding the current master
+		masterAddr := r.masterResolver.Address()
+		replicaErr := r.replicaResolver.UpdateReplicas(masterAddr)
+
+		if replicaErr != nil {
+			errCount++
+			err = replicaErr
+			log.Println("Replica update error:", replicaErr)
 		} else {
 			errCount = 0
 		}
@@ -313,7 +315,14 @@ func (r *RedisSentinelResolver) initialResolve() error {
 	if err := r.masterResolver.InitialMasterAddressResolve(); err != nil {
 		return err
 	}
-	return r.replicaResolver.InitialReplicaResolve()
+	masterAddr := r.masterResolver.Address()
+	if err := r.replicaResolver.UpdateReplicas(masterAddr); err != nil {
+		return err
+	}
+	if r.debug {
+		log.Printf("[DEBUG] Initial setup: master %s, replicas %v", masterAddr, r.replicaResolver.replicas)
+	}
+	return nil
 }
 
 func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string) (*net.TCPAddr, error) {
@@ -479,7 +488,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 			}
 			// Check if replica is accessible
 			if err := checkTCPConnect(addr); err != nil {
-				log.Printf("replica %s not accessible: %v", addr, err)
+				log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
 				continue
 			}
 			replicas = append(replicas, addr)

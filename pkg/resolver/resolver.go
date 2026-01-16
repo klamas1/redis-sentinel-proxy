@@ -458,7 +458,9 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	numSlaves, err := strconv.Atoi(parts[0][1:])
 	if err != nil {
 		return nil, fmt.Errorf("error parsing number of slaves: %w", err)
-	}
+	} else {
+    log.Printf("[DEBUG] numSlaves=%d", numSlaves)
+  }
 
 	var replicas []*net.TCPAddr
 	index := 1
@@ -477,7 +479,9 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		var ip, port string
 		for j := 0; j < numFields; j++ {
 			log.Printf("[DEBUG] j=%d, index=%d", j, index)
-			if index+3 >= len(parts) {
+			
+			// Проверка на достаточность элементов для парсинга
+			if index+1 >= len(parts) || !strings.HasPrefix(parts[index], "$") {
 				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
 				log.Printf("[DEBUG] Remaining parts: %v", parts[index:])
 				break
@@ -486,10 +490,17 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 			index++
 			key := parts[index]
 			index++
+			
+			if index+1 >= len(parts) || !strings.HasPrefix(parts[index], "$") {
+				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
+				log.Printf("[DEBUG] Remaining parts: %v", parts[index:])
+				break
+			}
 			// Skip $len for value
 			index++
 			value := parts[index]
 			index++
+			
 			if key == "ip" {
 				ip = value
 			}

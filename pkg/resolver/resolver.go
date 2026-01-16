@@ -418,25 +418,20 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		}
 	}
 
-	// Request replicas
+	// Request replica address
 	getReplicasCommand := fmt.Sprintf("SENTINEL REPLICAS %s\r\n", masterName)
 	if _, err := conn.Write([]byte(getReplicasCommand)); err != nil {
 		return nil, fmt.Errorf("error writing to sentinel: %w", err)
 	}
 
 	// Read response
-	var response strings.Builder
-	b := make([]byte, 2048)
-	for {
-		n, err := conn.Read(b)
-		if err != nil {
-			break
-		}
-		response.Write(b[:n])
-		if n < len(b) {
-			break
-		}
+	b := make([]byte, 256)
+	n, err := conn.Read(b)
+	if err != nil {
+		return nil, fmt.Errorf("error getting info from sentinel: %w", err)
 	}
+
+  response.Write(b[:n])
 
 	log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
 

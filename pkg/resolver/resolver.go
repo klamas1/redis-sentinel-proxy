@@ -468,39 +468,52 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
   }
 
 	var replicas []*net.TCPAddr
+	index := 1
 	for i := 0; i < numSlaves; i++ {
-
-    if len(parts) < 5 {
-      return nil, errors.New("couldn't get master address from sentinel")
-    }
-
-    // Assemble replica address
-    // 2026/01/16 16:02:53 [DEBUG] Received response from sentinel: [*2 $12 10.111.35.50 $4 6379 ]
-    // 2026/01/16 16:02:53 [DEBUG] Sentinel slaves response: "*2\r\n*42\r\n$4\r\nname\r\n$17\r\n10.111.40.28:6379\r\n$2\r\nip\r\n$12\r\n10.111.40.28\r\n$4\r\nport\r\n$4\r\n6379\r\n$5\r\nrunid\r\n$40\r\n3096e4ead704d1bfae0c32daa53d41c969ed335e\r\n$5\r\nflags\r\n$5\r\nslave\r\n$21\r\nlink-pending-commands\r\n$1\r\n0\r\n$13\r\nlink-refcount\r\n$1\r\n1\r\n$14\r\nlast-ping-sent\r\n$1\r\n0\r\n$18\r\nlast-ok-ping-reply\r\n$3\r\n671\r\n$15\r\nlast-ping-reply\r\n$3\r\n671\r\n$23\r\ndown-after-milliseconds\r\n$4\r\n5000\r\n$12\r\ninfo-refresh\r\n$4\r\n4260\r\n$13\r\nrole-reported\r\n$5\r\nslave\r\n$18\r\nrole-reported-time\r\n$8\r\n32526048\r\n$21\r\nmaster-link-down-time\r\n$1\r\n0\r\n$18\r\nmaster-link-status\r\n$2\r\nok\r\n$11\r\nmaster-host\r\n$12\r\n10.111.35.50\r\n$11\r\nmaster-port\r\n$4\r\n6379\r\n$14\r\nslave-priority\r\n$3\r\n100\r\n$17\r\nslave-repl-offset\r\n$9\r\n619628880\r\n$17\r\nreplica-announced\r\n$1\r\n1\r\n*42\r\n$4\r\nname\r\n$18\r\n10.111.47.136:6379\r\n$2\r\nip\r\n$13\r\n10.111.47.136\r\n$4\r\nport\r\n$4\r\n6379\r\n$5\r\nrunid\r\n$40\r\nb9a5503c0a6d698518218619038f42c4c3c7e717\r\n$5\r\nflags\r\n$5\r\nslave\r\n$21\r\nlink-pending-commands\r\n$1\r\n0\r\n$13\r\nlink-refcount\r\n$1\r\n1\r\n$14\r\nlast-ping-sent\r\n$1\r\n0\r\n$18\r\nlast-ok-ping-reply\r\n$3\r\n671\r\n$15\r\nlast-ping-reply\r\n$3\r\n671\r\n$23\r\ndown-after-milliseconds\r\n$4\r\n5000\r\n$12\r\ninfo-refresh\r\n$4\r\n4260\r\n$13\r\nrole-reported\r\n$5\r\nslave\r\n$18\r\nrole-reported-time\r\n$8\r\n32526044\r\n$21\r\nmaster-link-down-time\r\n$1\r\n0\r\n$18\r\nmaster-link-status\r\n$2\r\nok\r\n$11\r\nmaster-host\r\n$12\r\n10.111.35.50\r\n$11\r\nmaster-port\r\n$4\r\n6379\r\n$14\r\nslave-priority\r\n$3\r\n100\r\n$17\r\nslave-repl-offset\r\n$9\r\n619628880\r\n$17\r\nreplica-announced\r\n$1\r\n1\r\n"
-    // 2026/01/16 16:02:53 [DEBUG] Parts: [*2 *42 $4 name $17 10.111.40.28:6379 $2 ip $12 10.111.40.28 $4 port $4 6379 $5 runid $40 3096e4ead704d1bfae0c32daa53d41c969ed335e $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 671 $15 last-ping-reply $3 671 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 4260 $13 role-reported $5 slave $18 role-reported-time $8 32526048 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619628880 $17 replica-announced $1 1 *42 $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379 $5 runid $40 b9a5503c0a6d698518218619038f42c4c3c7e717 $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 671 $15 last-ping-reply $3 671 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 4260 $13 role-reported $5 slave $18 role-reported-time $8 32526044 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619628880 $17 replica-announced $1 1]
-    // 2026/01/16 16:02:53 [DEBUG] numSlaves=2
-    // log.Printf("[DEBUG]         numSlaves=%s %s %s %s %s %s %s", parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7])
-    // 2026/01/16 16:02:53 [DEBUG] numSlaves=*2 *42 $4 name $17 10.111.40.28:6379 $2%!(EXTRA string=ip)
-    // 2026/01/16 16:02:53 error resolving redis master: address name: missing port in address
-    // 2026/01/16 16:02:53 Waiting for connections...
-    // 2026/01/16 16:02:53 Waiting for connections...
-    // 2026/01/16 16:02:53 Fatal: error resolving redis master: address name: missing port in address
-
-log.Printf("[DEBUG] numSlaves=%s %s %s %s %s %s %s", parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7])
-
-    addr, err := net.ResolveTCPAddr("tcp", parts[5])
-    if err != nil {
-      return nil, fmt.Errorf("error resolving redis master: %w", err)
-    }
-
-    // Check if replica is accessible
-    if err := checkTCPConnect(addr); err != nil {
-      log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
-      continue
-    }
-    log.Printf("[DEBUG] Replica %s accessible", addr.String())
-    replicas = append(replicas, addr)
-
+		if index >= len(parts) || !strings.HasPrefix(parts[index], "*") {
+			break
+		}
+		numElements, err := strconv.Atoi(parts[index][1:])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing number of elements for slave %d: %w", i, err)
+		}
+		index++
+		numPairs := numElements / 2
+		var ip, port string
+		for j := 0; j < numPairs; j++ {
+			if index+3 >= len(parts) {
+				break
+			}
+			// Skip $len for key
+			index++
+			key := parts[index]
+			index++
+			// Skip $len for value
+			index++
+			value := parts[index]
+			index++
+			if key == "ip" {
+				ip = value
+			}
+			if key == "port" {
+				port = value
+			}
+		}
+		if ip != "" && port != "" {
+			addrStr := fmt.Sprintf("%s:%s", ip, port)
+			addr, err := net.ResolveTCPAddr("tcp", addrStr)
+			if err != nil {
+				log.Printf("error resolving replica address %s: %v", addrStr, err)
+				continue
+			}
+			// Check if replica is accessible
+			if err := checkTCPConnect(addr); err != nil {
+				log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
+				continue
+			}
+			log.Printf("[DEBUG] Replica %s accessible", addr.String())
+			replicas = append(replicas, addr)
+		}
 	}
 
 	log.Printf("[DEBUG] Total replicas found: %d", len(replicas))

@@ -463,6 +463,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	var replicas []*net.TCPAddr
 	index := 1
 	for i := 0; i < numSlaves; i++ {
+		log.Printf("[DEBUG] i=%d, index=%d, len(parts)=%d", i, index, len(parts))
 		if index >= len(parts) || !strings.HasPrefix(parts[index], "*") {
 			log.Printf("[DEBUG] Breaking loop at i=%d, index=%d, len(parts)=%d", i, index, len(parts))
 			break
@@ -471,11 +472,14 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		if err != nil {
 			return nil, fmt.Errorf("error parsing number of fields for slave %d: %w", i, err)
 		}
+		log.Printf("[DEBUG] numFields=%d", numFields)
 		index++
 		var ip, port string
 		for j := 0; j < numFields; j++ {
+			log.Printf("[DEBUG] j=%d, index=%d", j, index)
 			if index+3 >= len(parts) {
 				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
+				log.Printf("[DEBUG] Remaining parts: %v", parts[index:])
 				break
 			}
 			// Skip $len for key

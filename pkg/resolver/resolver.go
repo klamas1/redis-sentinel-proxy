@@ -483,6 +483,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
     // 2026/01/16 15:50:28 accept tcp 0.0.0.0:9998: use of closed network connection
     // 2026/01/16 15:50:28 Fatal: error resolving redis master: address name: missing port in address
 
+log.Printf("[DEBUG] numSlaves=%s %s %s %s %s %s %s", parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7])
 
     addr, err := net.ResolveTCPAddr("tcp", parts[3])
     if err != nil {

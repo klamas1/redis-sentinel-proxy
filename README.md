@@ -11,7 +11,7 @@ Small command utility that:
 
 Usage:
 
-`./redis-sentinel-proxy -listen IP:MASTER_PORT -replica-listen IP:REPLICA_PORT -sentinel :SENTINEL_PORT -master NAME -balancing round-robin --resolve-retries 10`
+`./redis-sentinel-proxy -listen IP:MASTER_PORT -replica-listen IP:REPLICA_PORT -sentinel :SENTINEL_PORT -master NAME -balancing round-robin -debug --resolve-retries 10`
 
 testing
 ============

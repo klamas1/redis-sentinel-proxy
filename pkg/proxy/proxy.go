@@ -7,24 +7,27 @@ import (
 	"net"
 	"strings"
 
-	"github.com/flant/redis-sentinel-proxy/pkg/utils"
+	"github.com/klamas1/redis-sentinel-proxy/pkg/utils"
 	"golang.org/x/sync/errgroup"
 )
 
 type resolver interface {
-	Address() string
+	MasterAddress() string
+	ReplicaAddress() string
 	DecrementConn(addr string)
 }
 
 type RedisSentinelProxy struct {
 	localAddr *net.TCPAddr
 	resolver  resolver
+	mode      string // "master" or "replica"
 }
 
-func NewRedisSentinelProxy(localAddr *net.TCPAddr, r resolver) *RedisSentinelProxy {
+func NewRedisSentinelProxy(localAddr *net.TCPAddr, r resolver, mode string) *RedisSentinelProxy {
 	return &RedisSentinelProxy{
 		localAddr: localAddr,
 		resolver:  r,
+		mode:      mode,
 	}
 }
 
@@ -60,7 +63,12 @@ func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TC
 
 func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
 	defer incoming.Close()
-	remoteAddr := r.resolver.Address()
+	var remoteAddr string
+	if r.mode == "master" {
+		remoteAddr = r.resolver.MasterAddress()
+	} else {
+		remoteAddr = r.resolver.ReplicaAddress()
+	}
 	if remoteAddr == "" {
 		log.Printf("No address available")
 		return

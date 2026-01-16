@@ -1,4 +1,4 @@
-module github.com/flant/redis-sentinel-proxy
+module github.com/klamas1/redis-sentinel-proxy
 
 go 1.20
 

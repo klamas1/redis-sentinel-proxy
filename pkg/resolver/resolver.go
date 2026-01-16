@@ -1,4 +1,4 @@
-package masterresolver
+package resolver
 
 import (
 	"context"
@@ -11,7 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flant/redis-sentinel-proxy/pkg/utils"
+	"github.com/klamas1/redis-sentinel-proxy/pkg/utils"
+)
+
+type BalancingType int
+
+const (
+	RoundRobin BalancingType = iota
+	LeastConn
 )
 
 type RedisMasterResolver struct {
@@ -49,13 +56,17 @@ func (r *RedisMasterResolver) DecrementConn(addr string) {
 	// No-op for master
 }
 
+func (r *RedisMasterResolver) RetryOnResolveFail() int {
+	return r.retryOnMasterResolveFail
+}
+
 func (r *RedisMasterResolver) setMasterAddress(masterAddr *net.TCPAddr) {
 	r.masterAddrLock.Lock()
 	defer r.masterAddrLock.Unlock()
 	r.masterAddr = masterAddr.String()
 }
 
-func (r *RedisMasterResolver) updateMasterAddress() error {
+func (r *RedisMasterResolver) UpdateMasterAddress() error {
 	masterAddr, err := redisMasterFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName)
 	if err != nil {
 		log.Println(err)
@@ -66,7 +77,7 @@ func (r *RedisMasterResolver) updateMasterAddress() error {
 }
 
 func (r *RedisMasterResolver) UpdateMasterAddressLoop(ctx context.Context) error {
-	if err := r.initialMasterAddressResolve(); err != nil {
+	if err := r.InitialMasterAddressResolve(); err != nil {
 		return err
 	}
 
@@ -81,7 +92,7 @@ func (r *RedisMasterResolver) UpdateMasterAddressLoop(ctx context.Context) error
 		case <-ticker.C:
 		}
 
-		err = r.updateMasterAddress()
+		err = r.UpdateMasterAddress()
 		if err != nil {
 			errCount++
 		} else {
@@ -91,9 +102,218 @@ func (r *RedisMasterResolver) UpdateMasterAddressLoop(ctx context.Context) error
 	return err
 }
 
-func (r *RedisMasterResolver) initialMasterAddressResolve() error {
+func (r *RedisMasterResolver) InitialMasterAddressResolve() error {
 	defer close(r.initialMasterResolveLock)
-	return r.updateMasterAddress()
+	return r.UpdateMasterAddress()
+}
+
+type ReplicaResolver struct {
+	masterName               string
+	sentinelAddr             *net.TCPAddr
+	sentinelPassword         string
+	retryOnResolveFail       int
+	balancingType            BalancingType
+	debug                    bool
+
+	replicasLock             *sync.RWMutex
+	initialResolveLock       chan struct{}
+
+	replicas                 []*net.TCPAddr
+	currentIndex             int
+	connCounts               map[string]int
+	connCountsLock           *sync.Mutex
+}
+
+func NewReplicaResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, debug bool) *ReplicaResolver {
+	return &ReplicaResolver{
+		masterName:               masterName,
+		sentinelAddr:             sentinelAddr,
+		sentinelPassword:         sentinelPassword,
+		retryOnResolveFail:       retryOnResolveFail,
+		balancingType:            balancingType,
+		debug:                    debug,
+		replicasLock:             &sync.RWMutex{},
+		initialResolveLock:       make(chan struct{}),
+		connCounts:               make(map[string]int),
+		connCountsLock:           &sync.Mutex{},
+	}
+}
+
+func (r *ReplicaResolver) Address() string {
+	<-r.initialResolveLock
+
+	r.replicasLock.RLock()
+	defer r.replicasLock.RUnlock()
+
+	if len(r.replicas) == 0 {
+		return ""
+	}
+
+	var selectedAddr string
+	switch r.balancingType {
+	case RoundRobin:
+		addr := r.replicas[r.currentIndex%len(r.replicas)]
+		r.currentIndex++
+		selectedAddr = addr.String()
+	case LeastConn:
+		r.connCountsLock.Lock()
+		defer r.connCountsLock.Unlock()
+		minCount := -1
+		var selected *net.TCPAddr
+		for _, replica := range r.replicas {
+			key := replica.String()
+			count := r.connCounts[key]
+			if minCount == -1 || count < minCount {
+				minCount = count
+				selected = replica
+			}
+		}
+		if selected != nil {
+			r.connCounts[selected.String()]++
+			selectedAddr = selected.String()
+		}
+	default:
+		selectedAddr = r.replicas[0].String()
+	}
+
+	if r.debug {
+		log.Printf("Selected replica %s at %s", selectedAddr, time.Now().Format("2006-01-02 15:04:05"))
+	}
+	return selectedAddr
+}
+
+func (r *ReplicaResolver) DecrementConn(addr string) {
+	r.connCountsLock.Lock()
+	defer r.connCountsLock.Unlock()
+	if r.connCounts[addr] > 0 {
+		r.connCounts[addr]--
+	}
+}
+
+func (r *ReplicaResolver) RetryOnResolveFail() int {
+	return r.retryOnResolveFail
+}
+
+func (r *ReplicaResolver) InitialReplicaResolve() error {
+	defer close(r.initialResolveLock)
+	return r.UpdateReplicas()
+}
+
+func (r *ReplicaResolver) UpdateReplicasLoop(ctx context.Context) error {
+	if err := r.InitialReplicaResolve(); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	var err error
+	for errCount := 0; errCount <= r.retryOnResolveFail; {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		err = r.UpdateReplicas()
+		if err != nil {
+			errCount++
+		} else {
+			errCount = 0
+		}
+	}
+	return err
+}
+
+func (r *ReplicaResolver) UpdateReplicas() error {
+	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	r.setReplicas(replicas)
+	return nil
+}
+
+func (r *ReplicaResolver) setReplicas(replicas []*net.TCPAddr) {
+	r.replicasLock.Lock()
+	defer r.replicasLock.Unlock()
+	r.replicas = replicas
+	// Reset currentIndex if needed
+	if r.currentIndex >= len(replicas) {
+		r.currentIndex = 0
+	}
+}
+
+type RedisSentinelResolver struct {
+	masterResolver  *RedisMasterResolver
+	replicaResolver *ReplicaResolver
+}
+
+func NewRedisSentinelResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, debug bool) *RedisSentinelResolver {
+	masterResolver := NewRedisMasterResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail)
+	replicaResolver := NewReplicaResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail, balancingType, debug)
+	return &RedisSentinelResolver{
+		masterResolver:  masterResolver,
+		replicaResolver: replicaResolver,
+	}
+}
+
+func (r *RedisSentinelResolver) MasterAddress() string {
+	return r.masterResolver.Address()
+}
+
+func (r *RedisSentinelResolver) ReplicaAddress() string {
+	return r.replicaResolver.Address()
+}
+
+func (r *RedisSentinelResolver) DecrementConn(addr string) {
+	r.replicaResolver.DecrementConn(addr)
+}
+
+func (r *RedisSentinelResolver) UpdateLoop(ctx context.Context) error {
+	if err := r.initialResolve(); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	var err error
+	retryCount := r.masterResolver.RetryOnResolveFail()
+	for errCount := 0; errCount <= retryCount; {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		// Update both master and replicas synchronously
+		masterErr := r.masterResolver.UpdateMasterAddress()
+		replicaErr := r.replicaResolver.UpdateReplicas()
+
+		if masterErr != nil || replicaErr != nil {
+			errCount++
+			if masterErr != nil {
+				err = masterErr
+				log.Println("Master update error:", masterErr)
+			}
+			if replicaErr != nil {
+				err = replicaErr
+				log.Println("Replica update error:", replicaErr)
+			}
+		} else {
+			errCount = 0
+		}
+	}
+	return err
+}
+
+func (r *RedisSentinelResolver) initialResolve() error {
+	if err := r.masterResolver.InitialMasterAddressResolve(); err != nil {
+		return err
+	}
+	return r.replicaResolver.InitialReplicaResolve()
 }
 
 func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string) (*net.TCPAddr, error) {

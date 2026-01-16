@@ -9,9 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	masterresolver "github.com/flant/redis-sentinel-proxy/pkg/master_resolver"
-	"github.com/flant/redis-sentinel-proxy/pkg/proxy"
-	replicaresolver "github.com/flant/redis-sentinel-proxy/pkg/replica_resolver"
+	"github.com/klamas1/redis-sentinel-proxy/pkg/proxy"
+	"github.com/klamas1/redis-sentinel-proxy/pkg/resolver"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -24,6 +23,7 @@ func main() {
 		masterResolveRetries = 3
 		password             = ""
 		balancingType        = "round-robin"
+		debug                = false
 	)
 
 	flag.StringVar(&localAddr, "listen", localAddr, "local address for master proxy")
@@ -33,6 +33,7 @@ func main() {
 	flag.StringVar(&password, "password", password, "redis password")
 	flag.IntVar(&masterResolveRetries, "resolve-retries", masterResolveRetries, "number of consecutive retries of the redis master node resolve")
 	flag.StringVar(&balancingType, "balancing", balancingType, "balancing type for replicas: round-robin or leastconn")
+	flag.BoolVar(&debug, "debug", debug, "enable debug logging")
 	flag.Parse()
 
 	if envPassword := os.Getenv("SENTINEL_PASSWORD"); envPassword != "" {
@@ -40,22 +41,22 @@ func main() {
 	}
 
 	bt := parseBalancingType(balancingType)
-	if err := runProxying(localAddr, replicaAddr, sentinelAddr, password, masterName, masterResolveRetries, bt); err != nil {
+	if err := runProxying(localAddr, replicaAddr, sentinelAddr, password, masterName, masterResolveRetries, bt, debug); err != nil {
 		log.Fatalf("Fatal: %s", err)
 	}
 	log.Println("Exiting...")
 }
 
-func parseBalancingType(s string) replicaresolver.BalancingType {
+func parseBalancingType(s string) resolver.BalancingType {
 	switch s {
 	case "leastconn":
-		return replicaresolver.LeastConn
+		return resolver.LeastConn
 	default:
-		return replicaresolver.RoundRobin
+		return resolver.RoundRobin
 	}
 }
 
-func runProxying(localAddr, replicaAddr, sentinelAddr, password string, masterName string, masterResolveRetries int, bt replicaresolver.BalancingType) error {
+func runProxying(localAddr, replicaAddr, sentinelAddr, password string, masterName string, masterResolveRetries int, bt resolver.BalancingType, debug bool) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -63,15 +64,13 @@ func runProxying(localAddr, replicaAddr, sentinelAddr, password string, masterNa
 	raddr := resolveTCPAddr(replicaAddr)
 	saddr := resolveTCPAddr(sentinelAddr)
 
-	masterAddrResolver := masterresolver.NewRedisMasterResolver(masterName, saddr, password, masterResolveRetries)
-	replicaAddrResolver := replicaresolver.NewReplicaResolver(masterName, saddr, password, masterResolveRetries, bt)
+	sentinelResolver := resolver.NewRedisSentinelResolver(masterName, saddr, password, masterResolveRetries, bt, debug)
 
-	masterProxy := proxy.NewRedisSentinelProxy(laddr, masterAddrResolver)
-	replicaProxy := proxy.NewRedisSentinelProxy(raddr, replicaAddrResolver)
+	masterProxy := proxy.NewRedisSentinelProxy(laddr, sentinelResolver, "master")
+	replicaProxy := proxy.NewRedisSentinelProxy(raddr, sentinelResolver, "replica")
 
 	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error { return masterAddrResolver.UpdateMasterAddressLoop(ctx) })
-	eg.Go(func() error { return replicaAddrResolver.UpdateReplicasLoop(ctx) })
+	eg.Go(func() error { return sentinelResolver.UpdateLoop(ctx) })
 	eg.Go(func() error { return masterProxy.Run(ctx) })
 	eg.Go(func() error { return replicaProxy.Run(ctx) })
 	return eg.Wait()

@@ -207,13 +207,16 @@ func (r *ReplicaResolver) UpdateReplicas(masterAddr string) error {
 		log.Println(err)
 		return err
 	}
+	log.Printf("[DEBUG] UpdateReplicas before filter: replicas=%v, masterAddr=%s", replicas, masterAddr)
 	// Filter out the current master
 	var filtered []*net.TCPAddr
 	for _, replica := range replicas {
+		log.Printf("[DEBUG] Checking replica %s against master %s", replica.String(), masterAddr)
 		if replica.String() != masterAddr {
 			filtered = append(filtered, replica)
 		}
 	}
+	log.Printf("[DEBUG] UpdateReplicas after filter: filtered=%v", filtered)
 	r.setReplicas(filtered)
 	return nil
 }
@@ -477,25 +480,21 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		log.Printf("[DEBUG] numFields=%d", numFields)
 		index++
 		var ip, port string
-		for j := 0; j < numFields; j++ {
+		j := 0
+		for ; j < numFields; j++ {
 			log.Printf("[DEBUG] j=%d, index=%d", j, index)
 			
-			// Проверка на достаточность элементов для парсинга
-			if index+1 >= len(parts) || !strings.HasPrefix(parts[index], "$") {
-				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
-				log.Printf("[DEBUG] Remaining parts: %v", parts[index:])
+			// Проверка на достаточность элементов для парсинга пары ключ-значение
+			// Каждая пара: $<len> <key> $<len> <value>
+			if index+3 >= len(parts) || !strings.HasPrefix(parts[index], "$") || !strings.HasPrefix(parts[index+2], "$") {
+				log.Printf("[DEBUG] Not enough parts for j=%d: index=%d, required=%d, len=%d", j, index, index+3, len(parts))
+				log.Printf("[DEBUG] Parts from index %d: %v", index, parts[index:])
 				break
 			}
 			// Skip $len for key
 			index++
 			key := parts[index]
 			index++
-			
-			if index+1 >= len(parts) || !strings.HasPrefix(parts[index], "$") {
-				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
-				log.Printf("[DEBUG] Remaining parts: %v", parts[index:])
-				break
-			}
 			// Skip $len for value
 			index++
 			value := parts[index]
@@ -509,7 +508,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 			}
 		}
 		if ip != "" && port != "" {
-			log.Printf("[DEBUG] Found replica %s:%s", ip, port)
+			log.Printf("[DEBUG] Found replica %s:%s after %d fields", ip, port, j)
 			addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%s", ip, port))
 			if err != nil {
 				log.Printf("error resolving replica address %s:%s: %v", ip, port, err)

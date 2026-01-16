@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/flant/redis-sentinel-proxy/pkg/utils"
 	"golang.org/x/sync/errgroup"
@@ -58,15 +59,14 @@ func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TC
 }
 
 func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
+	defer incoming.Close()
 	remoteAddr := r.resolver.Address()
 	if remoteAddr == "" {
-		defer incoming.Close()
 		log.Printf("No address available")
 		return
 	}
 	remote, err := utils.TCPConnectWithTimeout(remoteAddr)
 	if err != nil {
-		defer incoming.Close()
 		log.Printf("Error connecting to %s: %s", remoteAddr, err)
 		return
 	}
@@ -92,7 +92,7 @@ func pipe(w io.WriteCloser, r io.Reader, sigChan chan<- struct{}) {
 	defer func() { sigChan <- struct{}{} }()
 	defer w.Close()
 
-	if _, err := io.Copy(w, r); err != nil {
+	if _, err := io.Copy(w, r); err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
 		log.Printf("Error writing content: %s", err)
 	}
 }

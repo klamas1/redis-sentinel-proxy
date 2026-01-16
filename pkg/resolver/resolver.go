@@ -437,7 +437,15 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 
 	log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
 
-	parts := strings.Split(response.String(), "\r\n")
+	// Разбиваем на части и фильтруем пустые строки
+	rawParts := strings.Split(response.String(), "\r\n")
+	var parts []string
+	for _, part := range rawParts {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+
 	log.Printf("[DEBUG] Parts: %v", parts)
 	if len(parts) < 1 {
 		return nil, errors.New("couldn't get replicas from sentinel")
@@ -456,6 +464,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	index := 1
 	for i := 0; i < numSlaves; i++ {
 		if index >= len(parts) || !strings.HasPrefix(parts[index], "*") {
+			log.Printf("[DEBUG] Breaking loop at i=%d, index=%d, len(parts)=%d", i, index, len(parts))
 			break
 		}
 		numFields, err := strconv.Atoi(parts[index][1:])
@@ -466,6 +475,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		var ip, port string
 		for j := 0; j < numFields; j++ {
 			if index+3 >= len(parts) {
+				log.Printf("[DEBUG] Breaking field loop at j=%d, index=%d, len(parts)=%d", j, index, len(parts))
 				break
 			}
 			// Skip $len for key

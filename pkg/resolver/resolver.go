@@ -435,7 +435,10 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		}
 	}
 
+	log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
+
 	parts := strings.Split(response.String(), "\r\n")
+	log.Printf("[DEBUG] Parts: %v", parts)
 	if len(parts) < 1 {
 		return nil, errors.New("couldn't get replicas from sentinel")
 	}

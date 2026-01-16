@@ -369,12 +369,13 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 	if err != nil {
 		return nil, fmt.Errorf("error getting info from sentinel: %w", err)
 	}
-  log.Printf("[DEBUG] Received response from sentinel: %s", string(b[:n]))
 	// Extract master address parts
 	parts := strings.Split(string(b[:n]), "\r\n")
 	if len(parts) < 5 {
 		return nil, errors.New("couldn't get master address from sentinel")
 	}
+
+  log.Printf("[DEBUG] Received response from sentinel: %s", parts)
 
 	// Assemble master address
 	formattedMasterAddress := fmt.Sprintf("%s:%s", parts[2], parts[4])
@@ -474,13 +475,14 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
     }
 
     // Assemble replica address
-    // 2026/01/16 15:45:00 [DEBUG] Parts: [*2 *42 $4 name $17 10.111.40.28:6379 $2 ip $12 10.111.40.28 $4 port $4 6379 $5 runid $40 3096e4ead704d1bfae0c32daa53d41c969ed335e $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 228 $15 last-ping-reply $3 228 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 5931 $13 role-reported $5 slave $18 role-reported-time $8 31453500 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619407250 $17 replica-announced $1 1 *42 $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379 $5 runid $40 b9a5503c0a6d698518218619038f42c4c3c7e717 $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 229 $15 last-ping-reply $3 229 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 5931 $13 role-reported $5 slave $18 role-reported-time $8 31453496 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619407250 $17 replica-announced $1 1]
-    // 2026/01/16 15:45:00 [DEBUG] numSlaves=2
-    // 2026/01/16 15:45:00 [DEBUG] numFields=42
-    // 2026/01/16 15:45:00 error resolving redis master: address tcp/$17: unknown port
-    // 2026/01/16 15:45:00 Waiting for connections...
-    // 2026/01/16 15:45:00 Waiting for connections...
-    // 2026/01/16 15:45:00 Fatal: error resolving redis master: address tcp/$17: unknown port
+    // 2026/01/16 15:50:28 [DEBUG] Sentinel slaves response: "*2\r\n*42\r\n$4\r\nname\r\n$18\r\n10.111.47.136:6379\r\n$2\r\nip\r\n$13\r\n10.111.47.136\r\n$4\r\nport\r\n$4\r\n6379\r\n$5\r\nrunid\r\n$40\r\nb9a5503c0a6d698518218619038f42c4c3c7e717\r\n$5\r\nflags\r\n$5\r\nslave\r\n$21\r\nlink-pending-commands\r\n$1\r\n0\r\n$13\r\nlink-refcount\r\n$1\r\n1\r\n$14\r\nlast-ping-sent\r\n$1\r\n0\r\n$18\r\nlast-ok-ping-reply\r\n$3\r\n571\r\n$15\r\nlast-ping-reply\r\n$3\r\n571\r\n$23\r\ndown-after-milliseconds\r\n$4\r\n5000\r\n$12\r\ninfo-refresh\r\n$4\r\n2589\r\n$13\r\nrole-reported\r\n$5\r\nslave\r\n$18\r\nrole-reported-time\r\n$8\r\n31781468\r\n$21\r\nmaster-link-down-time\r\n$1\r\n0\r\n$18\r\nmaster-link-status\r\n$2\r\nok\r\n$11\r\nmaster-host\r\n$12\r\n10.111.35.50\r\n$11\r\nmaster-port\r\n$4\r\n6379\r\n$14\r\nslave-priority\r\n$3\r\n100\r\n$17\r\nslave-repl-offset\r\n$9\r\n619475706\r\n$17\r\nreplica-announced\r\n$1\r\n1\r\n*42\r\n$4\r\nname\r\n$17\r\n10.111.40.28:6379\r\n$2\r\nip\r\n$12\r\n10.111.40.28\r\n$4\r\nport\r\n$4\r\n6379\r\n$5\r\nrunid\r\n$40\r\n3096e4ead704d1bfae0c32daa53d41c969ed335e\r\n$5\r\nflags\r\n$5\r\nslave\r\n$21\r\nlink-pending-commands\r\n$1\r\n0\r\n$13\r\nlink-refcount\r\n$1\r\n1\r\n$14\r\nlast-ping-sent\r\n$1\r\n0\r\n$18\r\nlast-ok-ping-reply\r\n$3\r\n571\r\n$15\r\nlast-ping-reply\r\n$3\r\n571\r\n$23\r\ndown-after-milliseconds\r\n$4\r\n5000\r\n$12\r\ninfo-refresh\r\n$4\r\n2589\r\n$13\r\nrole-reported\r\n$5\r\nslave\r\n$18\r\nrole-reported-time\r\n$8\r\n31781474\r\n$21\r\nmaster-link-down-time\r\n$1\r\n0\r\n$18\r\nmaster-link-status\r\n$2\r\nok\r\n$11\r\nmaster-host\r\n$12\r\n10.111.35.50\r\n$11\r\nmaster-port\r\n$4\r\n6379\r\n$14\r\nslave-priority\r\n$3\r\n100\r\n$17\r\nslave-repl-offset\r\n$9\r\n619475706\r\n$17\r\nreplica-announced\r\n$1\r\n1\r\n"
+    // 2026/01/16 15:50:28 [DEBUG] Parts: [*2 *42 $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379 $5 runid $40 b9a5503c0a6d698518218619038f42c4c3c7e717 $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 571 $15 last-ping-reply $3 571 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 2589 $13 role-reported $5 slave $18 role-reported-time $8 31781468 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619475706 $17 replica-announced $1 1 *42 $4 name $17 10.111.40.28:6379 $2 ip $12 10.111.40.28 $4 port $4 6379 $5 runid $40 3096e4ead704d1bfae0c32daa53d41c969ed335e $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 571 $15 last-ping-reply $3 571 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 2589 $13 role-reported $5 slave $18 role-reported-time $8 31781474 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619475706 $17 replica-announced $1 1]
+    // 2026/01/16 15:50:28 [DEBUG] numSlaves=2
+    // 2026/01/16 15:50:28 error resolving redis master: address name: missing port in address
+    // 2026/01/16 15:50:28 accept tcp 0.0.0.0:9999: use of closed network connection
+    // 2026/01/16 15:50:28 accept tcp 0.0.0.0:9998: use of closed network connection
+    // 2026/01/16 15:50:28 Fatal: error resolving redis master: address name: missing port in address
+
 
     addr, err := net.ResolveTCPAddr("tcp", parts[3])
     if err != nil {

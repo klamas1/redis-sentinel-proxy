@@ -467,22 +467,22 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
   }
 
 	var replicas []*net.TCPAddr
-	index := 1
 	for i := 0; i < numSlaves; i++ {
 
-		numFields, err := strconv.Atoi(parts[index][1:])
-		if err != nil {
-			return nil, fmt.Errorf("error parsing number of fields for slave %d: %w", i, err)
-		}
     if len(parts) < 5 {
       return nil, errors.New("couldn't get master address from sentinel")
     }
-		log.Printf("[DEBUG] numFields=%d", numFields)
 
     // Assemble replica address
-    // $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379
-    formattedReplicaAddress := fmt.Sprintf("%s:%s", parts[2], parts[4])
-    addr, err := net.ResolveTCPAddr("tcp", formattedReplicaAddress)
+    // 2026/01/16 15:45:00 [DEBUG] Parts: [*2 *42 $4 name $17 10.111.40.28:6379 $2 ip $12 10.111.40.28 $4 port $4 6379 $5 runid $40 3096e4ead704d1bfae0c32daa53d41c969ed335e $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 228 $15 last-ping-reply $3 228 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 5931 $13 role-reported $5 slave $18 role-reported-time $8 31453500 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619407250 $17 replica-announced $1 1 *42 $4 name $18 10.111.47.136:6379 $2 ip $13 10.111.47.136 $4 port $4 6379 $5 runid $40 b9a5503c0a6d698518218619038f42c4c3c7e717 $5 flags $5 slave $21 link-pending-commands $1 0 $13 link-refcount $1 1 $14 last-ping-sent $1 0 $18 last-ok-ping-reply $3 229 $15 last-ping-reply $3 229 $23 down-after-milliseconds $4 5000 $12 info-refresh $4 5931 $13 role-reported $5 slave $18 role-reported-time $8 31453496 $21 master-link-down-time $1 0 $18 master-link-status $2 ok $11 master-host $12 10.111.35.50 $11 master-port $4 6379 $14 slave-priority $3 100 $17 slave-repl-offset $9 619407250 $17 replica-announced $1 1]
+    // 2026/01/16 15:45:00 [DEBUG] numSlaves=2
+    // 2026/01/16 15:45:00 [DEBUG] numFields=42
+    // 2026/01/16 15:45:00 error resolving redis master: address tcp/$17: unknown port
+    // 2026/01/16 15:45:00 Waiting for connections...
+    // 2026/01/16 15:45:00 Waiting for connections...
+    // 2026/01/16 15:45:00 Fatal: error resolving redis master: address tcp/$17: unknown port
+
+    addr, err := net.ResolveTCPAddr("tcp", parts[3])
     if err != nil {
       return nil, fmt.Errorf("error resolving redis master: %w", err)
     }

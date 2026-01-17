@@ -66,8 +66,8 @@ func runProxying(localAddr, replicaAddr, sentinelAddr, password string, masterNa
 
 	sentinelResolver := resolver.NewRedisSentinelResolver(masterName, saddr, password, masterResolveRetries, bt, debug)
 
-	masterProxy := proxy.NewRedisSentinelProxy(laddr, sentinelResolver, "master")
-	replicaProxy := proxy.NewRedisSentinelProxy(raddr, sentinelResolver, "replica")
+	masterProxy := proxy.NewRedisSentinelProxy(laddr, sentinelResolver, "master", debug)
+	replicaProxy := proxy.NewRedisSentinelProxy(raddr, sentinelResolver, "replica", debug)
 
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error { return sentinelResolver.UpdateLoop(ctx) })

@@ -202,22 +202,28 @@ func (r *ReplicaResolver) RetryOnResolveFail() int {
 
 
 func (r *ReplicaResolver) UpdateReplicas(masterAddr string) error {
-	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName)
+	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName, r.debug)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-  log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
-	log.Printf("[DEBUG] UpdateReplicas before filter: replicas=%v, masterAddr=%s", replicas, masterAddr)
+	if r.debug {
+		log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
+		log.Printf("[DEBUG] UpdateReplicas before filter: replicas=%v, masterAddr=%s", replicas, masterAddr)
+	}
 	// Filter out the current master
 	var filtered []*net.TCPAddr
 	for _, replica := range replicas {
-		log.Printf("[DEBUG] Checking replica %s against master %s", replica.String(), masterAddr)
+		if r.debug {
+			log.Printf("[DEBUG] Checking replica %s against master %s", replica.String(), masterAddr)
+		}
 		if replica.String() != masterAddr {
 			filtered = append(filtered, replica)
 		}
 	}
-	log.Printf("[DEBUG] UpdateReplicas after filter: filtered=%v", filtered)
+	if r.debug {
+		log.Printf("[DEBUG] UpdateReplicas after filter: filtered=%v", filtered)
+	}
 	r.setReplicas(filtered)
 	return nil
 }
@@ -392,7 +398,7 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 	return addr, nil
 }
 
-func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string) ([]*net.TCPAddr, error) {
+func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string, debug bool) ([]*net.TCPAddr, error) {
 	conn, err := utils.TCPConnectWithTimeout(sentinelAddress.String())
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to sentinel: %w", err)
@@ -440,7 +446,9 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		}
 	}
 
-	log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
+	if debug {
+		log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
+	}
 
 	// Разбиваем на части и фильтруем пустые строки
 	rawParts := strings.Split(response.String(), "\r\n")
@@ -451,7 +459,9 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		}
 	}
 
-	log.Printf("[DEBUG] Parts: %v", parts)
+	if debug {
+		log.Printf("[DEBUG] Parts: %v", parts)
+	}
 	if len(parts) < 1 {
 		return nil, errors.New("couldn't get replicas from sentinel")
 	}
@@ -463,9 +473,10 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	numSlaves, err := strconv.Atoi(parts[0][1:])
 	if err != nil {
 		return nil, fmt.Errorf("error parsing number of slaves: %w", err)
-	} else {
-    log.Printf("[DEBUG] numSlaves=%d", numSlaves)
-  }
+	}
+  if debug {
+	  log.Printf("[DEBUG] numSlaves=%d", numSlaves)
+	}
 
 	var replicas []*net.TCPAddr
 	index := 1
@@ -503,7 +514,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 			addrStr := fmt.Sprintf("%s:%s", ip, port)
 			addr, err := net.ResolveTCPAddr("tcp", addrStr)
 			if err != nil {
-				log.Printf("error resolving replica address %s: %v", addrStr, err)
+				log.Printf("Error resolving replica address %s: %v", addrStr, err)
 				continue
 			}
 			// Check if replica is accessible
@@ -511,12 +522,16 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 				log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
 				continue
 			}
-			log.Printf("[DEBUG] Replica %s accessible", addr.String())
+			if debug {
+				log.Printf("[DEBUG] Replica %s accessible", addr.String())
+			}
 			replicas = append(replicas, addr)
 		}
 	}
 
-	log.Printf("[DEBUG] Total replicas found: %d", len(replicas))
+	if debug {
+		log.Printf("[DEBUG] Total replicas found: %d", len(replicas))
+	}
 	return replicas, nil
 }
 

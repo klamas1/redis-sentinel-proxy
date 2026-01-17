@@ -21,13 +21,15 @@ type RedisSentinelProxy struct {
 	localAddr *net.TCPAddr
 	resolver  resolver
 	mode      string // "master" or "replica"
+	debug     bool
 }
 
-func NewRedisSentinelProxy(localAddr *net.TCPAddr, r resolver, mode string) *RedisSentinelProxy {
+func NewRedisSentinelProxy(localAddr *net.TCPAddr, r resolver, mode string, debug bool) *RedisSentinelProxy {
 	return &RedisSentinelProxy{
 		localAddr: localAddr,
 		resolver:  r,
 		mode:      mode,
+		debug:     debug,
 	}
 }
 
@@ -45,7 +47,7 @@ func (r *RedisSentinelProxy) Run(bigCtx context.Context) error {
 }
 
 func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TCPListener) error {
-	log.Println("Waiting for connections...")
+	log.Println("Waiting for connections for proxy", strings.ToUpper(r.mode), "on", listener.Addr().String())
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -55,6 +57,10 @@ func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TC
 		if err != nil {
 			log.Println(err)
 			continue
+		}
+
+		if r.debug {
+			log.Printf("[DEBUG] New client connection from %s to %s proxy", conn.RemoteAddr().String(), r.mode)
 		}
 
 		go r.proxy(conn)
@@ -70,17 +76,18 @@ func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
 		remoteAddr = r.resolver.ReplicaAddress()
 	}
 	if remoteAddr == "" {
-		log.Printf("[DEBUG] Proxy request: no address available")
+		log.Printf("[ERROR] Proxy request to %s: no upstream address available", r.mode)
 		return
 	}
-	log.Printf("[DEBUG] Proxy request: connecting to %s", remoteAddr)
+	if r.debug {
+		log.Printf("[DEBUG] Proxy request: connecting to %s", remoteAddr)
+	}
 	remote, err := utils.TCPConnectWithTimeout(remoteAddr)
 	if err != nil {
-		log.Printf("[DEBUG] Proxy error: failed to connect to %s: %s", remoteAddr, err)
+		log.Printf("Proxy error: failed to connect to %s: %s", remoteAddr, err)
 		return
 	}
 	defer r.resolver.DecrementConn(remoteAddr)
-	log.Printf("[DEBUG] Proxy response: connected to %s", remoteAddr)
 
 	sigChan := make(chan struct{})
 	defer close(sigChan)

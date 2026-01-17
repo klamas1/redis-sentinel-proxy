@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/klamas1/redis-sentinel-proxy/pkg/resp"
 	"github.com/klamas1/redis-sentinel-proxy/pkg/utils"
 )
 
@@ -432,102 +433,57 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		return nil, fmt.Errorf("error writing to sentinel: %w", err)
 	}
 
-	// Read response
-	var response strings.Builder
-	b := make([]byte, 2048)
-	for {
-		n, err := conn.Read(b)
-		if err != nil {
-			break
-		}
-		response.Write(b[:n])
-		if n < len(b) {
-			break
-		}
+	// Read the full response from sentinel
+	responseBytes, err := io.ReadAll(conn)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response from sentinel: %w", err)
 	}
+	response := string(responseBytes)
 
 	if debug {
-		log.Printf("[DEBUG] Sentinel slaves response: %q", response.String())
+		log.Printf("[DEBUG] Sentinel slaves response: %q", response)
 	}
 
-	// Разбиваем на части и фильтруем пустые строки
-	rawParts := strings.Split(response.String(), "\r\n")
-	var parts []string
+	// Split into parts and filter out empty strings
+	rawParts := strings.Split(response, "\r\n")
+	parts := make([]string, 0, len(rawParts))
 	for _, part := range rawParts {
 		if part != "" {
 			parts = append(parts, part)
 		}
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Parts: %v", parts)
-	}
 	if len(parts) < 1 {
 		return nil, errors.New("couldn't get replicas from sentinel")
 	}
 
-	// Parse RESP array
-	if !strings.HasPrefix(parts[0], "*") {
-		return nil, errors.New("invalid response format")
-	}
-	numSlaves, err := strconv.Atoi(parts[0][1:])
+	// Use the new RESP parser
+	parser := resp.NewRespParserFromParts(parts, debug)
+	replicaMaps, err := parser.ParseSentinelReplicas()
 	if err != nil {
-		return nil, fmt.Errorf("error parsing number of slaves: %w", err)
-	}
-  if debug {
-	  log.Printf("[DEBUG] numSlaves=%d", numSlaves)
+		return nil, fmt.Errorf("error parsing sentinel replicas: %w", err)
 	}
 
 	var replicas []*net.TCPAddr
-	index := 1
-	for i := 0; i < numSlaves; i++ {
-		if index >= len(parts) || !strings.HasPrefix(parts[index], "*") {
-			break
-		}
-		numElements, err := strconv.Atoi(parts[index][1:])
-		if err != nil {
-			return nil, fmt.Errorf("error parsing number of elements for slave %d: %w", i, err)
-		}
-		index++
-		numPairs := numElements / 2
-		var ip, port string
-		for j := 0; j < numPairs; j++ {
-			if index+3 >= len(parts) {
-				break
-			}
-			// Skip $len for key
-			index++
-			key := parts[index]
-			index++
-			// Skip $len for value
-			index++
-			value := parts[index]
-			index++
-			if key == "ip" {
-				ip = value
-			}
-			if key == "port" {
-				port = value
-			}
-		}
-		if ip != "" && port != "" {
-			addrStr := fmt.Sprintf("%s:%s", ip, port)
-			addr, err := net.ResolveTCPAddr("tcp", addrStr)
-			if err != nil {
-				log.Printf("Error resolving replica address %s: %v", addrStr, err)
-				continue
-			}
-			// Check if replica is accessible
-			if err := checkTCPConnect(addr); err != nil {
-				log.Printf("[DEBUG] Replica %s failed: %v", addr.String(), err)
-				continue
-			}
-			if debug {
-				log.Printf("[DEBUG] Replica %s accessible", addr.String())
-			}
-			replicas = append(replicas, addr)
-		}
-	}
+	for _, rep := range replicaMaps {
+
+    // Assemble replica address
+    formattedReplicaAddress := fmt.Sprintf("%s:%s", rep["ip"], rep["port"])
+    addr, err := net.ResolveTCPAddr("tcp", formattedReplicaAddress)
+    if err != nil {
+      return nil, fmt.Errorf("Error resolving replica address %s: %v", formattedReplicaAddress, err)
+      continue
+    }
+    // Check if replica is accessible
+    if err := checkTCPConnect(addr); err != nil {
+      return nil, fmt.Errorf("Replica %s failed: %v", addr.String(), err)
+      continue
+    }
+    if debug {
+      log.Printf("[DEBUG] Replica address %s accessible", addr.String())
+    }
+    replicas = append(replicas, addr)
+  }
 
 	if debug {
 		log.Printf("[DEBUG] Total replicas found: %d", len(replicas))

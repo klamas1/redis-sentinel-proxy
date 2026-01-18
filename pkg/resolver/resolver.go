@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strings"
@@ -329,7 +328,7 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	// Authenticate with sentinel if password is provided
 	if sentinelPassword != "" {
@@ -421,19 +420,30 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 		return nil, fmt.Errorf("error writing to sentinel: %w", err)
 	}
 
-	// Read the full response from sentinel
-	responseBytes, err := io.ReadAll(conn)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response from sentinel: %w", err)
+	// Read response
+	var response strings.Builder
+	b := make([]byte, 8192)
+	for {
+		n, err := conn.Read(b)
+		if err != nil {
+			if err.Error() == "EOF" || strings.Contains(err.Error(), "timeout") {
+				break
+			}
+			return nil, fmt.Errorf("error reading from sentinel: %w", err)
+		}
+		response.Write(b[:n])
+		if n < len(b) {
+			break
+		}
 	}
-	response := string(responseBytes)
+	responseStr := response.String()
 
 	if debug {
-		log.Printf("[DEBUG] Sentinel slaves response: %q", response)
+		log.Printf("[DEBUG] Sentinel slaves response: %q", responseStr)
 	}
 
 	// Split into parts and filter out empty strings
-	rawParts := strings.Split(response, "\r\n")
+	rawParts := strings.Split(responseStr, "\r\n")
 	parts := make([]string, 0, len(rawParts))
 	for _, part := range rawParts {
 		if part != "" {

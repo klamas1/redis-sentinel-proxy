@@ -213,6 +213,9 @@ func (r *ReplicaResolver) UpdateReplicas() error {
 		log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
 	}
 	r.setReplicas(replicas)
+	if r.debug {
+		log.Printf("[DEBUG] Set %d replicas", len(replicas))
+	}
 	return nil
 }
 

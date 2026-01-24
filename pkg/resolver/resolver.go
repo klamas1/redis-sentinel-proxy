@@ -476,10 +476,10 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
       continue
     }
     // Check if replica is accessible
-    if err := checkTCPConnect(addr); err != nil {
-      return nil, fmt.Errorf("Replica %s failed: %v", addr.String(), err)
-      continue
-    }
+    // if err := checkTCPConnect(addr); err != nil {
+    //   return nil, fmt.Errorf("Replica %s failed: %v", addr.String(), err)
+    //   continue
+    // }
     if debug {
       log.Printf("[DEBUG] Replica address %s accessible", addr.String())
     }

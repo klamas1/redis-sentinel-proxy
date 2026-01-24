@@ -154,6 +154,7 @@ func (r *ReplicaResolver) Address() string {
 	defer r.replicasLock.RUnlock()
 
 	if len(r.replicas) == 0 {
+		log.Printf("[ERROR] No replicas available for balancing")
 		return ""
 	}
 
@@ -184,9 +185,7 @@ func (r *ReplicaResolver) Address() string {
 		selectedAddr = r.replicas[0].String()
 	}
 
-	if r.debug {
-		log.Printf("Selected replica %s at %s", selectedAddr, time.Now().Format("2006-01-02 15:04:05"))
-	}
+	log.Printf("Selected replica %s", selectedAddr)
 	return selectedAddr
 }
 
@@ -213,9 +212,7 @@ func (r *ReplicaResolver) UpdateReplicas() error {
 		log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
 	}
 	r.setReplicas(replicas)
-	if r.debug {
-		log.Printf("[DEBUG] Set %d replicas", len(replicas))
-	}
+	log.Printf("Set %d replicas", len(replicas))
 	return nil
 }
 
@@ -486,9 +483,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
     replicas = append(replicas, addr)
   }
 
-	if debug {
-		log.Printf("[DEBUG] Total replicas found: %d", len(replicas))
-	}
+	log.Printf("Total replicas found: %d", len(replicas))
 	return replicas, nil
 }
 

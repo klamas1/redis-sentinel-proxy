@@ -70,22 +70,45 @@ func (r *RedisSentinelProxy) runListenLoop(ctx context.Context, listener *net.TC
 func (r *RedisSentinelProxy) proxy(incoming io.ReadWriteCloser) {
 	defer incoming.Close()
 	var remoteAddr string
+	var remote net.Conn
+	var err error
 	if r.mode == "master" {
 		remoteAddr = r.resolver.MasterAddress()
+		if remoteAddr == "" {
+			log.Printf("[ERROR] Proxy request to master: no upstream address available")
+			return
+		}
+		if r.debug {
+			log.Printf("[DEBUG] Proxy request: connecting to %s", remoteAddr)
+		}
+		remote, err = utils.TCPConnectWithTimeout(remoteAddr)
+		if err != nil {
+			log.Printf("Proxy error: failed to connect to %s: %s", remoteAddr, err)
+			return
+		}
 	} else {
-		remoteAddr = r.resolver.ReplicaAddress()
-	}
-	if remoteAddr == "" {
-		log.Printf("[ERROR] Proxy request to %s: no upstream address available", r.mode)
-		return
-	}
-	if r.debug {
-		log.Printf("[DEBUG] Proxy request: connecting to %s", remoteAddr)
-	}
-	remote, err := utils.TCPConnectWithTimeout(remoteAddr)
-	if err != nil {
-		log.Printf("Proxy error: failed to connect to %s: %s", remoteAddr, err)
-		return
+		const maxRetries = 3
+		for i := 0; i < maxRetries; i++ {
+			remoteAddr = r.resolver.ReplicaAddress()
+			if remoteAddr == "" {
+				log.Printf("[ERROR] No upstream address available for replica")
+				return
+			}
+			if r.debug {
+				log.Printf("[DEBUG] Proxy request: trying to connect to %s", remoteAddr)
+			}
+			remote, err = utils.TCPConnectWithTimeout(remoteAddr)
+			if err == nil {
+				log.Printf("Successfully connected to replica %s", remoteAddr)
+				break
+			} else {
+				log.Printf("Failed to connect to %s: %s", remoteAddr, err)
+			}
+		}
+		if err != nil {
+			log.Printf("Proxy error: failed to connect to any replica after %d attempts", maxRetries)
+			return
+		}
 	}
 	defer r.resolver.DecrementConn(remoteAddr)
 

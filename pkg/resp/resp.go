@@ -82,13 +82,13 @@ func (p *RespParser) parseHash() (map[string]string, error) {
 		return nil, err
 	}
 	if p.debug {
-		log.Printf("DEBUG: Hash с %d полями", hashLen)
+		log.Printf("DEBUG: Hash с %d элементами", hashLen)
 	}
 
-	m := make(map[string]string, hashLen)
-	for j := 0; j < hashLen; j++ {
+	m := make(map[string]string, hashLen/2)
+	for j := 0; j < hashLen; j += 2 {
 		if p.index+1 >= len(p.parts) {
-			return nil, fmt.Errorf("unexpected EOF reading field %d", j)
+			return nil, fmt.Errorf("unexpected EOF reading field %d", j/2)
 		}
 
 		keyLen := p.parts[p.index]

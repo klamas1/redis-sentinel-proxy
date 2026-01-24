@@ -50,6 +50,8 @@ services:
   redis-sentinel:
     build:
       context: ./redis_sentinel
+    ports:
+      - 26379:26379
     networks:
       - redis-test
     depends_on:

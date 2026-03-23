@@ -2,35 +2,31 @@ package resp
 
 import (
 	"fmt"
-	"log"
 	"strconv"
+
+	"github.com/klamas1/redis-sentinel-proxy/pkg/logger"
 )
 
 type RespParser struct {
 	parts  []string
 	index  int
-	debug  bool
+	logger logger.Logger
 }
 
-func NewRespParserFromParts(parts []string, debug bool) *RespParser {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	return &RespParser{parts: parts, debug: debug}
+func NewRespParserFromParts(parts []string, appLogger logger.Logger) *RespParser {
+	return &RespParser{parts: parts, logger: appLogger}
 }
 
 // ParseSentinelReplicas парсит parts в []map[string]string
 func (p *RespParser) ParseSentinelReplicas() ([]map[string]string, error) {
-	if p.debug {
-		log.Println("DEBUG: Начинаем парсинг SENTINEL REPLICAS из parts")
-	}
+	p.logger.Debug("DEBUG: Начинаем парсинг SENTINEL REPLICAS из parts")
 
 	if p.index >= len(p.parts) {
 		return nil, fmt.Errorf("no more data")
 	}
 
 	arrayHeader := p.parts[p.index]
-	if p.debug {
-		log.Printf("DEBUG readLine: %q", arrayHeader)
-	}
+	p.logger.Debugf("DEBUG readLine: %q", arrayHeader)
 	p.index++
 
 	if arrayHeader[0] != '*' {
@@ -40,9 +36,7 @@ func (p *RespParser) ParseSentinelReplicas() ([]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.debug {
-		log.Printf("DEBUG: Массив из %d элементов", n)
-	}
+	p.logger.Debugf("DEBUG: Массив из %d элементов", n)
 
 	replicas := make([]map[string]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -53,12 +47,10 @@ func (p *RespParser) ParseSentinelReplicas() ([]map[string]string, error) {
 		replicas = append(replicas, replica)
 	}
 
-	if p.debug {
-		log.Printf("DEBUG: Найдено %d реплик", len(replicas))
-		for i, rep := range replicas {
-			log.Printf("DEBUG: Реплика %d: ip=%s port=%s flags=%v",
-				i, rep["ip"], rep["port"], rep["flags"])
-		}
+	p.logger.Debugf("DEBUG: Найдено %d реплик", len(replicas))
+	for i, rep := range replicas {
+		p.logger.Debugf("DEBUG: Реплика %d: ip=%s port=%s flags=%v",
+			i, rep["ip"], rep["port"], rep["flags"])
 	}
 	return replicas, nil
 }
@@ -69,9 +61,7 @@ func (p *RespParser) parseHash() (map[string]string, error) {
 	}
 
 	hashHeader := p.parts[p.index]
-	if p.debug {
-		log.Printf("DEBUG readLine: %q", hashHeader)
-	}
+	p.logger.Debugf("DEBUG readLine: %q", hashHeader)
 	p.index++
 
 	if hashHeader[0] != '*' {
@@ -81,9 +71,7 @@ func (p *RespParser) parseHash() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.debug {
-		log.Printf("DEBUG: Hash с %d элементами", hashLen)
-	}
+	p.logger.Debugf("DEBUG: Hash с %d элементами", hashLen)
 
 	m := make(map[string]string, hashLen/2)
 	for j := 0; j < hashLen; j += 2 {
@@ -106,9 +94,7 @@ func (p *RespParser) parseHash() (map[string]string, error) {
 		}
 
 		m[key] = val
-		if p.debug {
-			log.Printf("DEBUG: поле %s = %s", key, val)
-		}
+		p.logger.Debugf("DEBUG: поле %s = %s", key, val)
 	}
 	return m, nil
 }
@@ -132,8 +118,6 @@ func (p *RespParser) readBulkString(lenHeader string) (string, error) {
 		return "", fmt.Errorf("bulk string length mismatch: expected %d, got %d", n, len(value))
 	}
 
-	if p.debug {
-		log.Printf("DEBUG readBulk value: %q (len=%d)", value, n)
-	}
+	p.logger.Debugf("DEBUG readBulk value: %q (len=%d)", value, n)
 	return value, nil
 }

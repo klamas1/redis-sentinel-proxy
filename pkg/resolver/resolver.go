@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/klamas1/redis-sentinel-proxy/pkg/logger"
+	"github.com/klamas1/redis-sentinel-proxy/pkg/metrics"
 	"github.com/klamas1/redis-sentinel-proxy/pkg/resp"
 	"github.com/klamas1/redis-sentinel-proxy/pkg/utils"
 )
@@ -26,7 +28,7 @@ type RedisMasterResolver struct {
 	sentinelAddr             *net.TCPAddr
 	sentinelPassword         string
 	retryOnMasterResolveFail int
-	debug                    bool
+	logger                   logger.Logger
 
 	masterAddrLock           *sync.RWMutex
 	initialMasterResolveLock chan struct{}
@@ -35,13 +37,13 @@ type RedisMasterResolver struct {
 	previousMaster string
 }
 
-func NewRedisMasterResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnMasterResolveFail int, debug bool) *RedisMasterResolver {
+func NewRedisMasterResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnMasterResolveFail int, appLogger logger.Logger) *RedisMasterResolver {
 	return &RedisMasterResolver{
 		masterName:               masterName,
 		sentinelAddr:             sentinelAddr,
 		sentinelPassword:         sentinelPassword,
 		retryOnMasterResolveFail: retryOnMasterResolveFail,
-		debug:                    debug,
+		logger:                   appLogger,
 		masterAddrLock:           &sync.RWMutex{},
 		initialMasterResolveLock: make(chan struct{}),
 	}
@@ -59,6 +61,11 @@ func (r *RedisMasterResolver) DecrementConn(addr string) {
 	// No-op for master
 }
 
+// IncrementConn is a no-op for master resolver
+func (r *RedisMasterResolver) IncrementConn(addr string) {
+	// No-op for master
+}
+
 func (r *RedisMasterResolver) RetryOnResolveFail() int {
 	return r.retryOnMasterResolveFail
 }
@@ -68,16 +75,16 @@ func (r *RedisMasterResolver) setMasterAddress(masterAddr *net.TCPAddr) {
 	defer r.masterAddrLock.Unlock()
 	newAddr := masterAddr.String()
 	if r.masterAddr != "" && r.masterAddr != newAddr {
-		log.Printf("[DEBUG] Master switched from %s to %s", r.masterAddr, newAddr)
+		r.logger.Info("Master switched from %s to %s", r.masterAddr, newAddr)
 	}
 	r.previousMaster = r.masterAddr
 	r.masterAddr = newAddr
 }
 
 func (r *RedisMasterResolver) UpdateMasterAddress() error {
-	masterAddr, err := redisMasterFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName, r.debug)
+	masterAddr, err := redisMasterFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName, r.logger)
 	if err != nil {
-		log.Println(err)
+		r.logger.Error("Failed to update master address: %s", err)
 		return err
 	}
 	r.setMasterAddress(masterAddr)
@@ -121,55 +128,68 @@ type ReplicaResolver struct {
 	sentinelPassword         string
 	retryOnResolveFail       int
 	balancingType            BalancingType
-	debug                    bool
+	logger                   logger.Logger
+	metrics                  *metrics.Metrics
 
 	replicasLock             *sync.RWMutex
 	initialResolveLock       chan struct{}
 
 	replicas                 []*net.TCPAddr
-	currentIndex             int
+	currentIndex             atomic.Int32
 	connCounts               map[string]int
 	connCountsLock           *sync.Mutex
+
+	// Health checker integration
+	healthChecker *HealthChecker
 }
 
-func NewReplicaResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, debug bool) *ReplicaResolver {
+func NewReplicaResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, appLogger logger.Logger, healthChecker *HealthChecker, appMetrics *metrics.Metrics) *ReplicaResolver {
 	return &ReplicaResolver{
 		masterName:               masterName,
 		sentinelAddr:             sentinelAddr,
 		sentinelPassword:         sentinelPassword,
 		retryOnResolveFail:       retryOnResolveFail,
 		balancingType:            balancingType,
-		debug:                    debug,
+		logger:                   appLogger,
+		metrics:                  appMetrics,
 		replicasLock:             &sync.RWMutex{},
 		initialResolveLock:       make(chan struct{}),
 		connCounts:               make(map[string]int),
 		connCountsLock:           &sync.Mutex{},
+		healthChecker:            healthChecker,
 	}
 }
 
 func (r *ReplicaResolver) Address() string {
 	<-r.initialResolveLock
 
-	r.replicasLock.RLock()
-	defer r.replicasLock.RUnlock()
+	// Get healthy replicas if health checker is enabled
+	var replicasToUse []*net.TCPAddr
+	if r.healthChecker != nil {
+		replicasToUse = r.healthChecker.GetHealthyReplicas()
+	} else {
+		r.replicasLock.RLock()
+		replicasToUse = append([]*net.TCPAddr(nil), r.replicas...)
+		r.replicasLock.RUnlock()
+	}
 
-	if len(r.replicas) == 0 {
-		log.Printf("[ERROR] No replicas available for balancing")
+	if len(replicasToUse) == 0 {
+		r.logger.Error("[ERROR] No healthy replicas available for balancing")
 		return ""
 	}
 
 	var selectedAddr string
 	switch r.balancingType {
 	case RoundRobin:
-		addr := r.replicas[r.currentIndex%len(r.replicas)]
-		r.currentIndex++
+		// Use atomic operations to avoid race condition
+		idx := r.currentIndex.Add(1) - 1
+		addr := replicasToUse[idx%int32(len(replicasToUse))]
 		selectedAddr = addr.String()
 	case LeastConn:
 		r.connCountsLock.Lock()
-		defer r.connCountsLock.Unlock()
 		minCount := -1
 		var selected *net.TCPAddr
-		for _, replica := range r.replicas {
+		for _, replica := range replicasToUse {
 			key := replica.String()
 			count := r.connCounts[key]
 			if minCount == -1 || count < minCount {
@@ -178,14 +198,14 @@ func (r *ReplicaResolver) Address() string {
 			}
 		}
 		if selected != nil {
-			r.connCounts[selected.String()]++
 			selectedAddr = selected.String()
 		}
+		r.connCountsLock.Unlock()
 	default:
-		selectedAddr = r.replicas[0].String()
+		selectedAddr = replicasToUse[0].String()
 	}
 
-	log.Printf("Selected replica %s", selectedAddr)
+	r.logger.Info("Selected replica %s", selectedAddr)
 	return selectedAddr
 }
 
@@ -197,22 +217,27 @@ func (r *ReplicaResolver) DecrementConn(addr string) {
 	}
 }
 
+// IncrementConn increments the connection count for a specific replica address
+// This is called after a successful connection to ensure accurate load balancing
+func (r *ReplicaResolver) IncrementConn(addr string) {
+	r.connCountsLock.Lock()
+	defer r.connCountsLock.Unlock()
+	r.connCounts[addr]++
+}
+
 func (r *ReplicaResolver) RetryOnResolveFail() int {
 	return r.retryOnResolveFail
 }
 
-
 func (r *ReplicaResolver) UpdateReplicas() error {
-	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName, r.debug)
+	replicas, err := RedisReplicasFromSentinelAddr(r.sentinelAddr, r.sentinelPassword, r.masterName, r.logger)
 	if err != nil {
-		log.Println(err)
+		r.logger.Error("Failed to update replicas: %s", err)
 		return err
 	}
-	if r.debug {
-		log.Printf("[DEBUG] Sentinel slaves response: %v", replicas)
-	}
+	r.logger.Debugf("[DEBUG] Sentinel slaves response: %v", replicas)
 	r.setReplicas(replicas)
-	log.Printf("Set %d replicas", len(replicas))
+	r.logger.Info("Set %d replicas", len(replicas))
 	return nil
 }
 
@@ -226,40 +251,65 @@ func (r *ReplicaResolver) setReplicas(replicas []*net.TCPAddr) {
 	r.replicasLock.Lock()
 	defer r.replicasLock.Unlock()
 	r.replicas = replicas
-	// Reset currentIndex if needed
-	if r.currentIndex >= len(replicas) {
-		r.currentIndex = 0
+	// Reset currentIndex if needed using atomic operations
+	current := r.currentIndex.Load()
+	if current >= int32(len(replicas)) {
+		r.currentIndex.Store(0)
+	}
+	// Update health checker with new replica list
+	if r.healthChecker != nil {
+		r.healthChecker.UpdateReplicaList(replicas)
+	}
+	// Update metrics for each replica
+	if r.metrics != nil {
+		for _, replica := range replicas {
+			addr := replica.String()
+			if r.healthChecker != nil {
+				healthy := r.healthChecker.IsHealthy(addr)
+				r.metrics.SetReplicaHealth(addr, healthy)
+			} else {
+				r.metrics.SetReplicaHealth(addr, true)
+			}
+		}
 	}
 }
 
 type RedisSentinelResolver struct {
 	masterResolver  *RedisMasterResolver
 	replicaResolver *ReplicaResolver
-	debug           bool
+	healthChecker   *HealthChecker
+	logger          logger.Logger
+	metrics         *metrics.Metrics
 }
 
-func NewRedisSentinelResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, debug bool) *RedisSentinelResolver {
-	masterResolver := NewRedisMasterResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail, debug)
-	replicaResolver := NewReplicaResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail, balancingType, debug)
+func NewRedisSentinelResolver(masterName string, sentinelAddr *net.TCPAddr, sentinelPassword string, retryOnResolveFail int, balancingType BalancingType, appLogger logger.Logger, healthConfig *HealthConfig, appMetrics *metrics.Metrics) *RedisSentinelResolver {
+	// Create health checker if config is provided
+	var healthChecker *HealthChecker
+	if healthConfig != nil {
+		healthChecker = NewHealthChecker(*healthConfig, appLogger)
+	}
+
+	masterResolver := NewRedisMasterResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail, appLogger)
+	replicaResolver := NewReplicaResolver(masterName, sentinelAddr, sentinelPassword, retryOnResolveFail, balancingType, appLogger, healthChecker, appMetrics)
 	return &RedisSentinelResolver{
 		masterResolver:  masterResolver,
 		replicaResolver: replicaResolver,
-		debug:           debug,
+		healthChecker:   healthChecker,
+		logger:          appLogger,
+		metrics:         appMetrics,
 	}
 }
 
 func (r *RedisSentinelResolver) MasterAddress() string {
 	addr := r.masterResolver.Address()
-	if r.debug {
-		log.Printf("[DEBUG] Resolver request: master address -> %s", addr)
-	}
+	r.logger.Debugf("[DEBUG] Resolver request: master address -> %s", addr)
 	return addr
 }
 
 func (r *RedisSentinelResolver) ReplicaAddress() string {
 	addr := r.replicaResolver.Address()
-	if r.debug && addr != "" {
-		log.Printf("[DEBUG] Resolver request: replica address -> %s", addr)
+	if addr != "" {
+		r.logger.Debugf("[DEBUG] Resolver request: replica address -> %s", addr)
 	}
 	return addr
 }
@@ -268,9 +318,19 @@ func (r *RedisSentinelResolver) DecrementConn(addr string) {
 	r.replicaResolver.DecrementConn(addr)
 }
 
+func (r *RedisSentinelResolver) IncrementConn(addr string) {
+	r.replicaResolver.IncrementConn(addr)
+}
+
 func (r *RedisSentinelResolver) UpdateLoop(ctx context.Context) error {
 	if err := r.initialResolve(); err != nil {
 		return err
+	}
+
+	// Start health checker if enabled
+	if r.healthChecker != nil {
+		r.healthChecker.Start(ctx)
+		defer r.healthChecker.Stop()
 	}
 
 	ticker := time.NewTicker(time.Second)
@@ -290,7 +350,7 @@ func (r *RedisSentinelResolver) UpdateLoop(ctx context.Context) error {
 		if masterErr != nil {
 			errCount++
 			err = masterErr
-			log.Println("Master update error:", masterErr)
+			r.logger.Error("Master update error: %s", masterErr)
 			continue
 		}
 
@@ -300,7 +360,7 @@ func (r *RedisSentinelResolver) UpdateLoop(ctx context.Context) error {
 		if replicaErr != nil {
 			errCount++
 			err = replicaErr
-			log.Println("Replica update error:", replicaErr)
+			r.logger.Error("Replica update error: %s", replicaErr)
 		} else {
 			errCount = 0
 		}
@@ -315,13 +375,11 @@ func (r *RedisSentinelResolver) initialResolve() error {
 	if err := r.replicaResolver.UpdateReplicas(); err != nil {
 		return err
 	}
-	if r.debug {
-		log.Printf("[DEBUG] Initial setup: master %s, replicas %v", r.masterResolver.Address(), r.replicaResolver.replicas)
-	}
+	r.logger.Debugf("[DEBUG] Initial setup: master %s, replicas %v", r.masterResolver.Address(), r.replicaResolver.replicas)
 	return nil
 }
 
-func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string, debug bool) (*net.TCPAddr, error) {
+func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string, appLogger logger.Logger) (*net.TCPAddr, error) {
 	conn, err := utils.TCPConnectWithTimeout(sentinelAddress.String())
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to sentinel: %w", err)
@@ -367,9 +425,7 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 		return nil, errors.New("couldn't get master address from sentinel")
 	}
 
-  if debug {
-   log.Printf("[DEBUG] Received response from sentinel: %s", parts)
-  }
+	appLogger.Debugf("[DEBUG] Received response from sentinel: %s", parts)
 
 	// Assemble master address
 	formattedMasterAddress := fmt.Sprintf("%s:%s", parts[2], parts[4])
@@ -386,7 +442,7 @@ func redisMasterFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword 
 	return addr, nil
 }
 
-func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string, debug bool) ([]*net.TCPAddr, error) {
+func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPassword string, masterName string, appLogger logger.Logger) ([]*net.TCPAddr, error) {
 	conn, err := utils.TCPConnectWithTimeout(sentinelAddress.String())
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to sentinel: %w", err)
@@ -438,9 +494,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	}
 	responseStr := response.String()
 
-	if debug {
-		log.Printf("[DEBUG] Sentinel slaves response: %q", responseStr)
-	}
+	appLogger.Debugf("[DEBUG] Sentinel slaves response: %q", responseStr)
 
 	// Split into parts and filter out empty strings
 	rawParts := strings.Split(responseStr, "\r\n")
@@ -456,7 +510,7 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 	}
 
 	// Use the new RESP parser
-	parser := resp.NewRespParserFromParts(parts, debug)
+	parser := resp.NewRespParserFromParts(parts, appLogger)
 	replicaMaps, err := parser.ParseSentinelReplicas()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing sentinel replicas: %w", err)
@@ -464,26 +518,22 @@ func RedisReplicasFromSentinelAddr(sentinelAddress *net.TCPAddr, sentinelPasswor
 
 	var replicas []*net.TCPAddr
 	for _, rep := range replicaMaps {
+		// Assemble replica address
+		formattedReplicaAddress := fmt.Sprintf("%s:%s", rep["ip"], rep["port"])
+		addr, err := net.ResolveTCPAddr("tcp", formattedReplicaAddress)
+		if err != nil {
+			return nil, fmt.Errorf("Error resolving replica address %s: %v", formattedReplicaAddress, err)
+		}
+		// Check if replica is accessible
+		// if err := checkTCPConnect(addr); err != nil {
+		//   return nil, fmt.Errorf("Replica %s failed: %v", addr.String(), err)
+		//   continue
+		// }
+		appLogger.Debugf("[DEBUG] Replica address %s accessible", addr.String())
+		replicas = append(replicas, addr)
+	}
 
-    // Assemble replica address
-    formattedReplicaAddress := fmt.Sprintf("%s:%s", rep["ip"], rep["port"])
-    addr, err := net.ResolveTCPAddr("tcp", formattedReplicaAddress)
-    if err != nil {
-      return nil, fmt.Errorf("Error resolving replica address %s: %v", formattedReplicaAddress, err)
-      continue
-    }
-    // Check if replica is accessible
-    // if err := checkTCPConnect(addr); err != nil {
-    //   return nil, fmt.Errorf("Replica %s failed: %v", addr.String(), err)
-    //   continue
-    // }
-    if debug {
-      log.Printf("[DEBUG] Replica address %s accessible", addr.String())
-    }
-    replicas = append(replicas, addr)
-  }
-
-	log.Printf("Total replicas found: %d", len(replicas))
+	appLogger.Info("Total replicas found: %d", len(replicas))
 	return replicas, nil
 }
 
